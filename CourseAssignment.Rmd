@@ -1,0 +1,175 @@
+---
+title: "Practical Machine Learning - Course Project"
+output: html_document
+---
+## Synopsis
+This project utilizes machine learning to develop a model that can predict the manner in which a specific exercise (bicep curl with a dumbell) was performed. Prediction will based on a set of data collected when the exercise is performed.  
+
+### Data Overview
+  
+The training data for developing the model was obtained from six participants. Participants in the study were asked to perform the exercise ("Unilateral Dumbell Biceps Curl") in five different ways. One way is exactly according to the prescribed approach for doing the exercise and four other ways representing common mistakes performed when doing the exercise. Participants were fitted with a total of four accelerometers - on their belt, forearm, arm, and dumbell. 
+
+Data collected from these accelerometers for a duration ranging from 0.5 secs to 2.5 secs is then used to build a machine learning model. Data collected comprise 
+* Raw accelerometer, gyroscope and magnetometer readings
+* Euler angles (roll, pitch and yaw) were calculated for each sensor
+* Eight additional features were calculated for each Euler angle - 
+    variance, standard deviation, max, min, 
+    amplitude, kurtosis and skewness 
+
+A total of 96 derived feature sets were generated. The "**classe**" variable in the training set specifies how the exercise was performed. Class A specifies that the exercise was performed correctly while B, C, D and E indicate that there was a "typical
+mistake" in performing the exercise
+
+Source: [Qualitative Activity Recognition of Weight Lifting Exercises][1]
+
+
+
+### Steps to developing model
+
+#### Step One
+The input file pml-training.csv is read into a data table for further processing
+
+```{r readingData}
+completeTrainingData <- read.csv("pml-training.csv",header=TRUE, na.strings=c("NA","#DIV/0!"), stringsAsFactors=TRUE)
+completeTestingData <- read.csv("pml-testing.csv",header=TRUE, na.strings=c("NA","#DIV/0!"), stringsAsFactors=TRUE)
+
+# Checking the dimensions of training data
+dim(completeTrainingData)
+
+# Checking the dimensions of testing data
+dim(completeTestingData)
+
+```
+
+#### Step Two - Feature Removal
+Features that have very little variance from one observation to the other contribute
+very little to the prediction and thereby can be removed.
+
+In addition, features that predominantly have NA values cannot be utilized effectively
+as the value associated with these features cannot be imputed meaningfully.
+
+```{r cleaningData}
+library(caret)
+
+# Look for features/predictors that have near zero variance
+nzv <- nearZeroVar(completeTrainingData)
+
+# Removing those variables that have near zero variance from the training data
+filteredCompleteTrainingData <- completeTrainingData[,-nzv]
+colNamesToRemove <- names(completeTrainingData)[nzv]
+
+# Function used to identify if a features more than a specified threshold of the values as NA
+isRelevantFeature <- function(col, threshold) {
+     (sum(is.na(col))/length(col)) > threshold
+}
+
+# Identifying features in the data frame that have more than a specified threshold of NAs as values
+# Return value from this function is a list of indices that have a TRUE if more than 70% of values are NA
+# and FALSE otherwise.
+# Row names in the data frame will correspond to the feature names in the original data frame. 
+additionalColIndicesToRemove <- data.frame(apply(filteredCompleteTrainingData, 2, isRelevantFeature, 0.7))
+
+# Retrieving feature names that have to be removed from the column Indices that don't meet the threshold
+additionalFeatureNamesToRemove <- rownames(additionalColIndicesToRemove)[which(additionalColIndicesToRemove[,1])]
+
+
+filteredCompleteTrainingData <- filteredCompleteTrainingData[,-which(names(filteredCompleteTrainingData) %in% additionalFeatureNamesToRemove)]
+
+# Add to list of columns that have to be removed
+colNamesToRemove <- c(colNamesToRemove, additionalFeatureNamesToRemove)
+
+# Removing the corresponding columnnames from the test data as well
+filteredTestingData <- completeTestingData[,-which(names(completeTestingData) %in% colNamesToRemove)]
+
+#Also removing problem_id column from the test data as it may interfere with prediction
+filteredTestingDataWithoutProblemID <- filteredTestingData[,-which(names(filteredTestingData) %in% c("problem_id"))]
+
+```
+### Step 3 : Training and Validation Data
+```{r}
+inTraining <- createDataPartition(filteredCompleteTrainingData$classe,p=0.7,list=FALSE)
+trainingData <- filteredCompleteTrainingData[inTraining,] ; validationData <- filteredCompleteTrainingData[-inTraining,]
+
+#In observing the data, the first six columns specify the row #, name of the person, time when
+#the exercise was performed etc and as such will not be useful in predictions. So, I decided
+#to remove thse from the training set.
+
+trainingData <- trainingData[,-c(1:6)]
+validationData <- validationData[,-c(1:6)]
+
+dim(trainingData) ; dim(validationData)
+
+```
+
+
+### Feature Selection and Model Building
+
+After reviewing a number of sources listed below, I decided to use the 
+_**wrapper**_ based approach for feature selection in-lieu of a filter based 
+approach. Though a filter based approach could be done agnostic of the 
+model,the wrapper based approach would yield better accuracy since it 
+will be tailored to the model chosen. In addition, models with built-in 
+features selection may be more efficient (not necessarily true in some 
+domains) than search routines external to the model. 
+
+* [Correlation-based Feature Selection for Machine Learning][2]  
+* [Feature Selection: A literature Review][3] 
+* [Feature Selection Overview][4] 
+
+The Caret package has built in feature selection models associated with
+specific model building methods. 
+
+I decided to use the random forest model building and also boosting model 
+building as these models have empirically performed well in prediction scenarios.
+
+```{r FeatureSelection, eval=FALSE}
+library(caret)
+#library(randomForest)
+
+#outcome <- filteredCompleteTrainingData["classe"]
+#predictors <- subset(filteredCompleteTrainingData, select=-c(classe))
+
+#ctrl <- rfeControl(functions = rfFuncs, method -"repeatedcv",repeats=5, verbose=FALSE)
+#rfProfie <- rfe(predictors, outcome$classe,sizes=(1:len(predictors)), rfeControl=ctrl)
+
+```
+### Random Forest Model building
+
+```{r RandomForest, cache=TRUE}
+library(caret)
+set.seed(4567)
+
+modelControl <- trainControl(method="repeatedcv", number=5, repeats=10)
+rfFit <- train(classe ~ ., data=trainingData, method="rf",trControl=modelControl,verbose=FALSE)
+predictionsRf <- predict(rfFit, validationData)
+confusionMatrix(predictionsRf, validationData$classe)
+
+```
+### Boosting Model Building
+```{r Boosting, cache=TRUE}
+set.seed(4567)
+
+modelControl <- trainControl(method="repeatedcv", number=5, repeats=10)
+gbmFit <- train(classe ~ ., data=trainingData, method="gbm",trControl=modelControl,verbose=FALSE)
+predictionsGbm <- predict(gbmFit, validationData)
+confusionMatrix(predictionsGbm, validationData$classe)
+
+```
+### Conclusion
+The **Random Forest** model yielded a higher accuracy **0.9905** as compared to the **Boosting Model** that had an accuracy of **0.956**. It would have been nice to try a model stacking approach to determine if we get better accuracy. But the long execution times (more than 24 hours) in R Studio discouraged me from trying it out. I am keen to try the parallel processing approaches to explore the impact on execution times.
+
+### Generating output files for submission
+
+```{r TestDataPrediction}
+testDataPredictions <- predict(rfFit,filteredTestingDataWithoutProblemID)
+filteredTestingData$classe <- testDataPredictions
+
+submit <- data.frame(problem_id = filteredTestingData$problem_id, classe = testDataPredictions)
+write.csv(submit, file = "coursera-submission.csv", row.names = FALSE)
+
+```
+
+[1]:http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf
+[2]:http://www.cs.waikato.ac.nz/~mhall/thesis.pdf
+[3]:http://www.smartcr.org/view/download.php?filename=smartcr_vol4no3p7.pdf
+[4]:http://topepo.github.io/caret/featureselection.html
+
